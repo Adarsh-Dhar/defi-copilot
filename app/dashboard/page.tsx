@@ -18,24 +18,15 @@ import {
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
-
-type Message = {
-  id: string
-  role: "user" | "assistant"
-  content: string
-}
-
-type Chat = {
-  id: string
-  title: string
-  messages: Message[]
-}
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Chat, Message } from "@/types/chat"
 
 export default function Dashboard() {
   const [chats, setChats] = useState<Chat[]>([
     {
       id: "1",
       title: "DeFi yield strategies",
+      model: "gemini",
       messages: [
         {
           id: "1",
@@ -56,6 +47,8 @@ export default function Dashboard() {
   const [input, setInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  // Always use Gemini model as requested
+  const selectedModel = "gemini"
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -71,6 +64,7 @@ export default function Dashboard() {
     const newChat: Chat = {
       id: Date.now().toString(),
       title: "New conversation",
+      model: selectedModel,
       messages: [],
     }
     setChats([...chats, newChat])
@@ -78,7 +72,7 @@ export default function Dashboard() {
     setInput("")
   }
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!input.trim()) return
 
     // Find the current chat
@@ -105,37 +99,51 @@ export default function Dashboard() {
     setChats(updatedChats)
     setInput("")
 
-    // Simulate AI response
+    // Send message to API
     setIsGenerating(true)
-    setTimeout(() => {
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: updatedChats[currentChatIndex].messages,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: generateResponse(input),
+        content: data.message.content,
       }
 
       updatedChats[currentChatIndex].messages.push(assistantMessage)
       setChats([...updatedChats])
+    } catch (error) {
+      console.error('Error sending message:', error)
+      
+      // Add error message
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: "Sorry, there was an error processing your request. Please try again later.",
+      }
+      
+      updatedChats[currentChatIndex].messages.push(errorMessage)
+      setChats([...updatedChats])
+    } finally {
       setIsGenerating(false)
-    }, 2000)
+    }
   }
 
-  const generateResponse = (prompt: string): string => {
-    // This is a simple mock response generator
-    const responses = [
-      "Based on current market conditions, I'd recommend considering liquidity provision on Uniswap V3 for ETH/USDC pairs with a concentrated liquidity range of ±5% around the current price. This strategy has been yielding approximately 15-20% APR when accounting for trading fees and liquidity mining rewards.",
-
-      "The current APY for staking ETH on Lido is approximately 3.8%, while Rocket Pool offers around 4.2% for node operators and 3.4% for rETH holders. Rocket Pool is generally considered more decentralized, while Lido has larger market share and liquidity.",
-
-      "Looking at on-chain data, there appears to be significant accumulation happening from whale addresses (>1000 ETH) over the past week. This often precedes upward price movement, though it's important to remember that past patterns don't guarantee future results.",
-
-      "The gas fees on Ethereum mainnet are currently averaging 25-30 gwei for standard transactions. If you're looking to minimize transaction costs, consider using Layer 2 solutions like Arbitrum or Optimism, which offer significantly lower fees (typically 10-20x cheaper) while maintaining Ethereum's security guarantees.",
-
-      "For DeFi insurance, protocols like Nexus Mutual and InsurAce offer coverage against smart contract failures, with premiums typically ranging from 2-5% annually depending on the protocol being insured. Given the recent exploits in the DeFi space, insurance might be worth considering for large positions.",
-    ]
-
-    return responses[Math.floor(Math.random() * responses.length)]
-  }
+  // No model change function needed as we're only using Gemini
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -209,14 +217,20 @@ export default function Dashboard() {
               <Coins className="h-5 w-5 text-emerald-400" />
               <span className="font-medium">DeFi Copilot</span>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              className="text-gray-400 hover:text-white"
-            >
-              {isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
-            </Button>
+            <div className="flex items-center gap-2">
+              <div className="px-3 py-1 bg-gray-800 border border-gray-700 rounded-md text-sm text-emerald-400 flex items-center gap-1">
+                <Bot className="h-4 w-4" />
+                <span>Gemini</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsFullscreen(!isFullscreen)}
+                className="text-gray-400 hover:text-white"
+              >
+                {isFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+              </Button>
+            </div>
           </header>
 
           {/* Chat area */}
