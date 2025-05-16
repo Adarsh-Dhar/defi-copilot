@@ -4,8 +4,10 @@ import type React from "react"
 
 import { useState, useRef, useEffect } from "react"
 import Link from "next/link"
-import { ArrowLeft, Bot, Coins, Loader2, Maximize2, Minimize2, Plus, Send, Settings, Sparkles } from "lucide-react"
+import { ArrowLeft, Bot, Coins, Loader2, Maximize2, Minimize2, Plus, Send, Settings, Sparkles, Trash, Pencil } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 import {
   Sidebar,
   SidebarContent,
@@ -22,28 +24,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Chat, Message } from "@/types/chat"
 
 export default function Dashboard() {
-  const [chats, setChats] = useState<Chat[]>([
-    {
-      id: "1",
-      title: "DeFi yield strategies",
-      model: "gemini",
-      messages: [
-        {
-          id: "1",
-          role: "user",
-          content: "What are the best yield farming strategies right now?",
-        },
-        {
-          id: "2",
-          role: "assistant",
-          content:
-            "Currently, the most profitable yield farming strategies involve liquidity provision on decentralized exchanges like Uniswap V3 and Curve Finance, particularly for stable asset pairs. \n\nSome specific opportunities worth considering:\n\n1. **Ethereum staking** - Post-Merge ETH staking offers around 3-5% APR with minimal risk\n\n2. **Stablecoin LP positions** - USDC/USDT pairs on Curve can yield 2-4% base APR plus additional CRV rewards\n\n3. **Real World Asset (RWA) protocols** - Platforms like Maple Finance and Centrifuge offering 7-10% on tokenized real-world assets\n\n4. **Layer 2 incentives** - Protocols on Arbitrum and Optimism are offering token incentives for early liquidity providers\n\nRemember that higher yields typically come with higher risks. It's important to consider factors like impermanent loss, smart contract risk, and protocol security when evaluating yield farming opportunities.",
-        },
-      ],
-    },
-  ])
+  const [chats, setChats] = useState<Chat[]>([])
 
-  const [activeChat, setActiveChat] = useState<string>("1")
+  const [activeChat, setActiveChat] = useState<string>("")
   const [input, setInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -145,6 +128,49 @@ export default function Dashboard() {
 
   // No model change function needed as we're only using Gemini
 
+  const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false)
+  const [chatToRename, setChatToRename] = useState<string>("")
+  const [newChatTitle, setNewChatTitle] = useState<string>("")
+
+  const handleRenameChat = (chatId: string) => {
+    const chat = chats.find(c => c.id === chatId)
+    if (chat) {
+      setChatToRename(chatId)
+      setNewChatTitle(chat.title)
+      setIsRenameDialogOpen(true)
+    }
+  }
+
+  const handleSaveRename = () => {
+    if (!newChatTitle.trim()) return
+
+    const updatedChats = chats.map(chat => {
+      if (chat.id === chatToRename) {
+        return { ...chat, title: newChatTitle.trim() }
+      }
+      return chat
+    })
+
+    setChats(updatedChats)
+    setIsRenameDialogOpen(false)
+    setChatToRename("")
+    setNewChatTitle("")
+  }
+
+  const handleDeleteChat = (chatId: string) => {
+    const updatedChats = chats.filter(chat => chat.id !== chatId)
+    setChats(updatedChats)
+    
+    // If we're deleting the active chat, set a new active chat
+    if (chatId === activeChat) {
+      if (updatedChats.length > 0) {
+        setActiveChat(updatedChats[0].id)
+      } else {
+        setActiveChat("")
+      }
+    }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
@@ -171,15 +197,48 @@ export default function Dashboard() {
           <SidebarContent>
             <SidebarMenu>
               {chats.map((chat) => (
-                <SidebarMenuItem key={chat.id}>
-                  <SidebarMenuButton
-                    onClick={() => setActiveChat(chat.id)}
-                    isActive={activeChat === chat.id}
-                    className="justify-start gap-2 text-sm"
-                  >
-                    <Bot className="h-4 w-4" />
-                    <span>{chat.title}</span>
-                  </SidebarMenuButton>
+                <SidebarMenuItem key={chat.id} className="group">
+                  <div className="flex items-center justify-between w-full">
+                    <SidebarMenuButton
+                      onClick={() => setActiveChat(chat.id)}
+                      isActive={activeChat === chat.id}
+                      className="justify-start gap-2 text-sm flex-1"
+                    >
+                      <Bot className="h-4 w-4" />
+                      <span className="truncate">{chat.title}</span>
+                    </SidebarMenuButton>
+                    <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-gray-400 hover:text-white"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRenameChat(chat.id);
+                        }}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 20h9"></path>
+                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                        </svg>
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-gray-400 hover:text-red-400"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteChat(chat.id);
+                        }}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 6h18"></path>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
+                          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                      </Button>
+                    </div>
+                  </div>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
@@ -344,6 +403,40 @@ export default function Dashboard() {
           </div>
         </main>
       </div>
+      {/* Rename Dialog */}
+      <Dialog open={isRenameDialogOpen} onOpenChange={setIsRenameDialogOpen}>
+        <DialogContent className="bg-gray-900 border border-gray-800 text-white">
+          <DialogHeader>
+            <DialogTitle>Rename Chat</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={newChatTitle}
+            onChange={(e) => setNewChatTitle(e.target.value)}
+            placeholder="Enter new title"
+            className="bg-gray-800 border-gray-700 text-white"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                handleSaveRename()
+              }
+            }}
+          />
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setIsRenameDialogOpen(false)}
+              className="text-gray-400 hover:text-white"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveRename}
+              className="bg-emerald-500 text-black hover:bg-emerald-600"
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SidebarProvider>
   )
 }
