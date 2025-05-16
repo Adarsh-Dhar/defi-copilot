@@ -22,37 +22,75 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Chat, Message } from "@/types/chat"
+import { useApi } from "@/hooks/useApi"
 
 export default function Dashboard() {
   const [chats, setChats] = useState<Chat[]>([])
-
   const [activeChat, setActiveChat] = useState<string>("")
   const [input, setInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   // Always use Gemini model as requested
   const selectedModel = "gemini"
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  
+  // Initialize API hook
+  const api = useApi()
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
+  // Fetch chats when component mounts
   useEffect(() => {
-    scrollToBottom()
+    const fetchInitialChats = async () => {
+      setIsLoading(true);
+      try {
+        const fetchedChats = await api.fetchChats();
+        setChats(fetchedChats);
+        
+        // Set active chat to the first chat if available
+        if (fetchedChats.length > 0 && !activeChat) {
+          setActiveChat(fetchedChats[0].id);
+          
+          // Load messages for the active chat
+          const messages = await api.getChatMessages(fetchedChats[0].id);
+          const updatedChats = [...fetchedChats];
+          const chatIndex = updatedChats.findIndex(chat => chat.id === fetchedChats[0].id);
+          if (chatIndex !== -1) {
+            updatedChats[chatIndex].messages = messages;
+            setChats(updatedChats);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching initial chats:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchInitialChats();
+  }, []);
+  
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    scrollToBottom();
   }, [chats])
 
-  const handleNewChat = () => {
-    const newChat: Chat = {
-      id: Date.now().toString(),
-      title: "New conversation",
-      model: selectedModel,
-      messages: [],
+  const handleNewChat = async () => {
+    try {
+      // Create a new chat via API
+      const newChat = await api.createChat("New conversation");
+      
+      // Update local state
+      setChats([...chats, newChat]);
+      setActiveChat(newChat.id);
+      setInput("");
+    } catch (error) {
+      console.error("Error creating new chat:", error);
     }
-    setChats([...chats, newChat])
-    setActiveChat(newChat.id)
-    setInput("")
   }
 
   const handleSendMessage = async () => {
@@ -65,7 +103,7 @@ export default function Dashboard() {
     // Create a copy of the chats array
     const updatedChats = [...chats]
 
-    // Add the user message
+    // Add the user message to the UI immediately
     const userMessage: Message = {
       id: Date.now().toString(),
       role: "user",
@@ -76,43 +114,47 @@ export default function Dashboard() {
 
     // Update the chat title if it's the first message
     if (updatedChats[currentChatIndex].messages.length === 1) {
-      updatedChats[currentChatIndex].title = input.slice(0, 30) + (input.length > 30 ? "..." : "")
+      const newTitle = input.slice(0, 30) + (input.length > 30 ? "..." : "")
+      updatedChats[currentChatIndex].title = newTitle
+      
+      // Update the chat title in the database
+      try {
+        // Make sure we have a valid chatId before attempting to rename
+        if (activeChat && typeof activeChat === 'string' && activeChat.trim() !== '') {
+          console.log('Updating chat title for chat ID:', activeChat);
+          await api.renameChat(activeChat, newTitle);
+        } else {
+          console.error('Cannot update chat title: activeChat is undefined or invalid');
+        }
+      } catch (error) {
+        console.error('Error updating chat title:', error)
+      }
     }
 
-    setChats(updatedChats)
+    // Update UI with user message
+    setChats([...updatedChats])
     setInput("")
 
     // Send message to API
     setIsGenerating(true)
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: updatedChats[currentChatIndex].messages,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`)
-      }
-
-      const data = await response.json()
+      // Send message to the API and get response
+      const messageResponse = await api.sendMessage(activeChat, input)
       
+      // Create assistant message from response
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: data.message.content,
+        content: messageResponse.answer,
       }
 
+      // Update the chat with the assistant's response
       updatedChats[currentChatIndex].messages.push(assistantMessage)
       setChats([...updatedChats])
     } catch (error) {
       console.error('Error sending message:', error)
       
-      // Add error message
+      // Add error message to UI
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
@@ -126,14 +168,12 @@ export default function Dashboard() {
     }
   }
 
-  // No model change function needed as we're only using Gemini
-
   const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false)
   const [chatToRename, setChatToRename] = useState<string>("")
   const [newChatTitle, setNewChatTitle] = useState<string>("")
 
   const handleRenameChat = (chatId: string) => {
-    const chat = chats.find(c => c.id === chatId)
+    const chat = chats.find((c) => c.id === chatId)
     if (chat) {
       setChatToRename(chatId)
       setNewChatTitle(chat.title)
@@ -141,32 +181,73 @@ export default function Dashboard() {
     }
   }
 
-  const handleSaveRename = () => {
-    if (!newChatTitle.trim()) return
+  const handleSaveRename = async () => {
+    // Validate inputs
+    if (!chatToRename || typeof chatToRename !== 'string' || chatToRename.trim() === '') {
+      console.error('Cannot rename chat: chatToRename is undefined or invalid');
+      setIsRenameDialogOpen(false);
+      setChatToRename("");
+      setNewChatTitle("");
+      return;
+    }
+    
+    if (!newChatTitle || !newChatTitle.trim()) {
+      console.error('Cannot rename chat: newChatTitle is empty');
+      return;
+    }
 
-    const updatedChats = chats.map(chat => {
-      if (chat.id === chatToRename) {
-        return { ...chat, title: newChatTitle.trim() }
-      }
-      return chat
-    })
+    console.log('Renaming chat with ID:', chatToRename, 'to title:', newChatTitle);
+    
+    try {
+      // Update chat title in the API
+      await api.renameChat(chatToRename, newChatTitle)
 
-    setChats(updatedChats)
-    setIsRenameDialogOpen(false)
-    setChatToRename("")
-    setNewChatTitle("")
+      // Update local state
+      const updatedChats = chats.map((chat) => {
+        if (chat.id === chatToRename) {
+          return { ...chat, title: newChatTitle }
+        }
+        return chat
+      })
+
+      setChats(updatedChats)
+    } catch (error) {
+      console.error('Error renaming chat:', error)
+    } finally {
+      setIsRenameDialogOpen(false)
+      setChatToRename("")
+      setNewChatTitle("")
+    }
   }
 
-  const handleDeleteChat = (chatId: string) => {
-    const updatedChats = chats.filter(chat => chat.id !== chatId)
-    setChats(updatedChats)
-    
-    // If we're deleting the active chat, set a new active chat
-    if (chatId === activeChat) {
-      if (updatedChats.length > 0) {
-        setActiveChat(updatedChats[0].id)
-      } else {
-        setActiveChat("")
+  const handleDeleteChat = async (chatId: string) => {
+    if (confirm("Are you sure you want to delete this chat?")) {
+      try {
+        // Delete chat via API
+        await api.deleteChat(chatId)
+        
+        // Update local state
+        const updatedChats = chats.filter((chat) => chat.id !== chatId)
+        setChats(updatedChats)
+
+        // If the active chat is deleted, set a new active chat
+        if (activeChat === chatId && updatedChats.length > 0) {
+          setActiveChat(updatedChats[0].id)
+          
+          // Load messages for the new active chat
+          const messages = await api.getChatMessages(updatedChats[0].id)
+          const newUpdatedChats = [...updatedChats]
+          const chatIndex = newUpdatedChats.findIndex(chat => chat.id === updatedChats[0].id)
+          if (chatIndex !== -1) {
+            newUpdatedChats[chatIndex].messages = messages
+            setChats(newUpdatedChats)
+          }
+        } else if (updatedChats.length === 0) {
+          setActiveChat("")
+        }
+      } catch (error) {
+        console.error('Error deleting chat:', error)
+        alert('Failed to delete chat. Please try again.')
       }
     }
   }
@@ -175,6 +256,40 @@ export default function Dashboard() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       handleSendMessage()
+    }
+  }
+  
+  // Load messages when a user selects a chat
+  const handleChatSelect = async (chatId: string) => {
+    if (chatId === activeChat) return
+    
+    setActiveChat(chatId)
+    setIsLoading(true)
+    
+    try {
+      // Check if we already have messages for this chat
+      const chatIndex = chats.findIndex(chat => chat.id === chatId)
+      if (chatIndex !== -1 && chats[chatIndex].messages.length > 0) {
+        // We already have messages, no need to fetch
+        setIsLoading(false)
+        return
+      }
+      
+      // Fetch messages for the selected chat
+      const messages = await api.getChatMessages(chatId)
+      
+      // Update the chat with the fetched messages
+      const updatedChats = [...chats]
+      const updatedChatIndex = updatedChats.findIndex(chat => chat.id === chatId)
+      
+      if (updatedChatIndex !== -1) {
+        updatedChats[updatedChatIndex].messages = messages
+        setChats(updatedChats)
+      }
+    } catch (error) {
+      console.error('Error loading chat messages:', error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -200,7 +315,7 @@ export default function Dashboard() {
                 <SidebarMenuItem key={chat.id} className="group">
                   <div className="flex items-center justify-between w-full">
                     <SidebarMenuButton
-                      onClick={() => setActiveChat(chat.id)}
+                      onClick={() => handleChatSelect(chat.id)}
                       isActive={activeChat === chat.id}
                       className="justify-start gap-2 text-sm flex-1"
                     >
@@ -217,10 +332,7 @@ export default function Dashboard() {
                           handleRenameChat(chat.id);
                         }}
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 20h9"></path>
-                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                        </svg>
+                        <Pencil className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -231,11 +343,7 @@ export default function Dashboard() {
                           handleDeleteChat(chat.id);
                         }}
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 6h18"></path>
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path>
-                          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
+                        <Trash className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>
@@ -251,14 +359,6 @@ export default function Dashboard() {
                   <Settings className="h-4 w-4" />
                   <span>Settings</span>
                 </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <Link href="/" className="w-full">
-                  <SidebarMenuButton className="justify-start gap-2 text-sm">
-                    <ArrowLeft className="h-4 w-4" />
-                    <span>Back to Home</span>
-                  </SidebarMenuButton>
-                </Link>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarFooter>
@@ -292,9 +392,14 @@ export default function Dashboard() {
             </div>
           </header>
 
-          {/* Chat area */}
-          <div className="flex-1 overflow-auto p-4 md:px-20 lg:px-32">
-            {currentChat && currentChat.messages.length > 0 ? (
+          {/* Main chat area */}
+          <div className="flex-1 overflow-y-auto p-4 md:px-20 lg:px-32">
+            {isLoading ? (
+              <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-emerald-500" />
+                <span className="ml-2 text-gray-400">Loading conversation...</span>
+              </div>
+            ) : currentChat && currentChat.messages.length > 0 ? (
               <div className="space-y-6">
                 {currentChat.messages.map((message) => (
                   <div
@@ -307,18 +412,37 @@ export default function Dashboard() {
                     <div
                       className={cn(
                         "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-                        message.role === "user" ? "bg-gray-700" : "bg-emerald-500/20 text-emerald-400",
+                        message.role === "user"
+                          ? "bg-gray-600"
+                          : "bg-emerald-500/20 text-emerald-400",
                       )}
                     >
-                      {message.role === "user" ? "U" : <Bot className="h-5 w-5" />}
+                      {message.role === "user" ? (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                          className="h-5 w-5 text-gray-300"
+                        >
+                          <path
+                            fillRule="evenodd"
+                            d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
+                      ) : (
+                        <Bot className="h-5 w-5" />
+                      )}
                     </div>
-                    <div className="flex-1 space-y-2">
-                      <div className="font-medium">{message.role === "user" ? "You" : "DeFi Copilot"}</div>
-                      <div className="whitespace-pre-wrap text-gray-300">{message.content}</div>
+                    <div className="flex-1">
+                      <div className="font-medium">
+                        {message.role === "user" ? "You" : "DeFi Copilot"}
+                      </div>
+                      <div className="mt-1 whitespace-pre-wrap">{message.content}</div>
                     </div>
                   </div>
                 ))}
-
+                
                 {isGenerating && (
                   <div className="flex items-start gap-4 rounded-lg bg-gray-900/50 p-4">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">

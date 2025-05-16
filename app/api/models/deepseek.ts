@@ -15,8 +15,23 @@ interface OpenRouterResponse {
 export async function getDeepseekResponse(messages: Message[]) {
   const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
   
+  // For development purposes, provide a mock response if API key is missing
   if (!OPENROUTER_API_KEY) {
-    throw new Error('OPENROUTER_API_KEY is not defined in environment variables');
+    console.warn('OPENROUTER_API_KEY is not defined in environment variables. Using mock response for development.');
+    
+    // Get the last user message
+    const lastUserMessage = messages.filter(msg => msg.role === 'user').pop();
+    const userQuestion = lastUserMessage?.content || '';
+    
+    return {
+      id: 'mock-response-id',
+      model: 'mock-deepseek-model',
+      message: {
+        role: 'assistant',
+        content: `This is a mock response from DeepSeek for development. You asked: "${userQuestion}". In production, this would be answered by the DeepSeek model. Please set the OPENROUTER_API_KEY environment variable to use the actual API.`
+      },
+      finish_reason: 'mock-complete'
+    };
   }
 
   // Format messages for OpenRouter API
