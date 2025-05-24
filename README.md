@@ -1,1 +1,2 @@
 # defi-copilot
+# story-ai
